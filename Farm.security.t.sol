@@ -982,16 +982,25 @@ contract FarmSecurityTest is Test {
         uint256 fakeTokenId = 99999; // 不存在的tokenId
 
         // 尝试提取不存在的NFT（应该失败）
+        // 会 revert ERC721NonexistentToken（因为 ownerOf 会抛出这个错误）
+        // 错误选择器：keccak256("ERC721NonexistentToken(uint256)") 的前4字节
+        bytes4 errorSelector = bytes4(keccak256("ERC721NonexistentToken(uint256)"));
         vm.prank(user1);
-        vm.expectRevert();
+        vm.expectRevert(
+            abi.encodeWithSelector(errorSelector, fakeTokenId)
+        );
         farm.unstakePUSD(fakeTokenId);
 
         // 尝试续期不存在的NFT（应该失败）
+        // 会 revert ERC721NonexistentToken（因为 ownerOf 会抛出这个错误）
         vm.prank(user1);
-        vm.expectRevert();
+        vm.expectRevert(
+            abi.encodeWithSelector(errorSelector, fakeTokenId)
+        );
         farm.renewStake(fakeTokenId, 30 days);
 
-        // 尝试查询不存在的NFT奖励（应该返回0或revert）
+        // 尝试查询不存在的NFT奖励（应该返回0，因为 getStakeRecord 可能返回空记录）
+        // getStakeInfo 不会 revert，而是返回 0
         (uint256 reward, string memory reason) = farm.getStakeInfo(user1, 1, fakeTokenId, 0);
         assertEq(reward, 0, "Reward should be 0 for non-existent NFT");
 
