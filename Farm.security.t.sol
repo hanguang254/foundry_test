@@ -31,6 +31,7 @@ contract FarmSecurityTest is Test {
     address admin = address(0xA11CE);
     address user1 = address(0xCAFE);
     address user2 = address(0xBEEF);
+    address user3 = address(0xDEAD);
     address operator = address(0x0908);
 
     uint256 constant CAP = 1_000_000_000 * 1e6;
@@ -137,6 +138,7 @@ contract FarmSecurityTest is Test {
         // ========= 11) 给用户准备 PUSD 余额 =========
         pusd.mint(user1, INITIAL_BALANCE);
         pusd.mint(user2, INITIAL_BALANCE);
+        pusd.mint(user3, INITIAL_BALANCE);
         pusd.mint(operator, INITIAL_BALANCE);
 
         pusd.mint(admin, 5_000_000 * 1e6);
@@ -156,6 +158,9 @@ contract FarmSecurityTest is Test {
         pusd.approve(address(farm), type(uint256).max);
 
         vm.prank(user2);
+        pusd.approve(address(farm), type(uint256).max);
+
+        vm.prank(user3);
         pusd.approve(address(farm), type(uint256).max);
 
         vm.prank(operator);
@@ -1569,5 +1574,153 @@ contract FarmSecurityTest is Test {
         // 注意：由于NFT转移时可能没有更新userAssets，tokenId可能仍在user1的列表中
         // 但实际所有权属于user2，所以这里只验证user2能找到订单
         console.log(unicode"✅ 验证完成：订单信息归属验证");
+    }
+
+    /**
+     * @notice 测试：NFT两次转移后新所有者续期
+     * @dev 验证user1质押后将NFT转移给user2，user2再转移给user3，user3续期后查看订单数据归属
+     */
+    function test_NFTDoubleTransferAndRenewByNewOwner() public {
+        console.log(unicode"测试：NFT两次转移后新所有者续期");
+
+        uint256 stakeAmount = 100 * 1e6;
+        uint256 lockPeriod = 30 days;
+        uint256 renewLockPeriod = 180 days; // 续期到180天
+
+        // user1 质押
+        vm.prank(user1);
+        pusd.mint(user1, stakeAmount);
+
+        vm.startPrank(user1);
+        pusd.approve(address(farm), type(uint256).max);
+        uint256 tokenId = farm.stakePUSD(stakeAmount, lockPeriod);
+        vm.stopPrank();
+
+        // 验证NFT属于user1
+        assertEq(nftManager.ownerOf(tokenId), user1, "NFT should be owned by user1");
+        console.log(unicode"✅ user1质押成功，获得NFT，tokenId:", tokenId);
+
+        // 查询user1的初始质押订单
+        (IFarm.StakeDetail[] memory user1StakesBefore, ,) = farm.getUserStakeDetails(user1, 0, 50, false, lockPeriod);
+        console.log(unicode"user1初始质押订单数量:", user1StakesBefore.length);
+        bool foundInUser1Before = false;
+        for (uint256 i = 0; i < user1StakesBefore.length; i++) {
+            if (user1StakesBefore[i].tokenId == tokenId) {
+                foundInUser1Before = true;
+                console.log(unicode"✅ user1初始订单 - tokenId:", user1StakesBefore[i].tokenId);
+                console.log(unicode"✅ user1初始订单 - 金额:", user1StakesBefore[i].amount / 1e6, unicode"PUSD");
+                console.log(unicode"✅ user1初始订单 - 锁定期:", user1StakesBefore[i].lockPeriod / 1 days, unicode"天");
+                break;
+            }
+        }
+        assertTrue(foundInUser1Before, "TokenId should be found in user1's stake details initially");
+
+        // user1 将NFT转移给user2
+        vm.prank(user1);
+        nftManager.transferFrom(user1, user2, tokenId);
+
+        // 验证NFT所有权已转移给user2
+        assertEq(nftManager.ownerOf(tokenId), user2, "NFT should be owned by user2 after first transfer");
+        console.log(unicode"✅ NFT已从user1转移给user2");
+
+        // 查询转移后user1和user2的质押订单
+        (IFarm.StakeDetail[] memory user1StakesAfterTransfer1, ,) = farm.getUserStakeDetails(user1, 0, 50, false, 0);
+        (IFarm.StakeDetail[] memory user2StakesAfterTransfer1, ,) = farm.getUserStakeDetails(user2, 0, 50, false, 0);
+        console.log(unicode"第一次转移后 - user1的质押订单数量:", user1StakesAfterTransfer1.length);
+        console.log(unicode"第一次转移后 - user2的质押订单数量:", user2StakesAfterTransfer1.length);
+
+        // user2 将NFT转移给user3
+        vm.prank(user2);
+        nftManager.transferFrom(user2, user3, tokenId);
+
+        // 验证NFT所有权已转移给user3
+        assertEq(nftManager.ownerOf(tokenId), user3, "NFT should be owned by user3 after second transfer");
+        console.log(unicode"✅ NFT已从user2转移给user3");
+
+        // 查询第二次转移后各用户的质押订单
+        (IFarm.StakeDetail[] memory user1StakesAfterTransfer2, ,) = farm.getUserStakeDetails(user1, 0, 50, false, 0);
+        (IFarm.StakeDetail[] memory user2StakesAfterTransfer2, ,) = farm.getUserStakeDetails(user2, 0, 50, false, 0);
+        (IFarm.StakeDetail[] memory user3StakesAfterTransfer2, ,) = farm.getUserStakeDetails(user3, 0, 50, false, 0);
+        console.log(unicode"第二次转移后 - user1的质押订单数量:", user1StakesAfterTransfer2.length);
+        console.log(unicode"第二次转移后 - user2的质押订单数量:", user2StakesAfterTransfer2.length);
+        console.log(unicode"第二次转移后 - user3的质押订单数量:", user3StakesAfterTransfer2.length);
+
+        // 快进到锁定期结束
+        vm.warp(block.timestamp + lockPeriod);
+        vm.prank(address(oracle));
+        oracle.sendHeartbeat();
+
+        console.log(unicode"✅ 锁定期已到期，准备续期");
+
+        // 查询续期前各用户的质押订单
+        (IFarm.StakeDetail[] memory user1StakesBeforeRenew, ,) = farm.getUserStakeDetails(user1, 0, 50, false, 0);
+        (IFarm.StakeDetail[] memory user2StakesBeforeRenew, ,) = farm.getUserStakeDetails(user2, 0, 50, false, 0);
+        (IFarm.StakeDetail[] memory user3StakesBeforeRenew, ,) = farm.getUserStakeDetails(user3, 0, 50, false, 0);
+        console.log(unicode"续期前 - user1的质押订单数量:", user1StakesBeforeRenew.length);
+        console.log(unicode"续期前 - user2的质押订单数量:", user2StakesBeforeRenew.length);
+        console.log(unicode"续期前 - user3的质押订单数量:", user3StakesBeforeRenew.length);
+
+        // user3 续期质押
+        vm.prank(user3);
+        farm.renewStake(tokenId, renewLockPeriod);
+
+        console.log(unicode"✅ user3续期成功，新锁定期:", renewLockPeriod / 1 days, unicode"天");
+
+        // 查询续期后各用户的质押订单
+        (IFarm.StakeDetail[] memory user1StakesAfterRenew, ,) = farm.getUserStakeDetails(user1, 0, 50, false, 0);
+        (IFarm.StakeDetail[] memory user2StakesAfterRenew, ,) = farm.getUserStakeDetails(user2, 0, 50, false, 0);
+        (IFarm.StakeDetail[] memory user3StakesAfterRenew, ,) = farm.getUserStakeDetails(user3, 0, 50, false, 0);
+        console.log(unicode"续期后 - user1的质押订单数量:", user1StakesAfterRenew.length);
+        console.log(unicode"续期后 - user2的质押订单数量:", user2StakesAfterRenew.length);
+        console.log(unicode"续期后 - user3的质押订单数量:", user3StakesAfterRenew.length);
+
+        // 验证订单信息应该在user3名下
+        bool foundInUser3 = false;
+        for (uint256 i = 0; i < user3StakesAfterRenew.length; i++) {
+            if (user3StakesAfterRenew[i].tokenId == tokenId) {
+                foundInUser3 = true;
+                console.log(unicode"✅ 在user3的订单中找到tokenId:", user3StakesAfterRenew[i].tokenId);
+                console.log(unicode"✅ 订单金额:", user3StakesAfterRenew[i].amount / 1e6, unicode"PUSD");
+                console.log(unicode"✅ 锁定期:", user3StakesAfterRenew[i].lockPeriod / 1 days, unicode"天");
+                console.log(unicode"✅ 开始时间:", user3StakesAfterRenew[i].startTime);
+                console.log(unicode"✅ 最后领取时间:", user3StakesAfterRenew[i].lastClaimTime);
+                console.log(unicode"✅ 订单状态（active）:", user3StakesAfterRenew[i].active);
+                
+                // 验证订单信息正确
+                assertEq(user3StakesAfterRenew[i].tokenId, tokenId, "TokenId should match");
+                assertGt(user3StakesAfterRenew[i].amount, stakeAmount, "Amount should include compounded rewards");
+                assertEq(user3StakesAfterRenew[i].lockPeriod, renewLockPeriod, "Lock period should be updated to renew period");
+                assertTrue(user3StakesAfterRenew[i].active, "Stake should be active");
+                break;
+            }
+        }
+        assertTrue(foundInUser3, "TokenId should be found in user3's stake details after renew");
+
+        // 验证订单信息不在user1名下
+        bool foundInUser1AfterRenew = false;
+        for (uint256 i = 0; i < user1StakesAfterRenew.length; i++) {
+            if (user1StakesAfterRenew[i].tokenId == tokenId) {
+                foundInUser1AfterRenew = true;
+                console.log(unicode"⚠️ 警告：在user1的订单中也找到了tokenId:", user1StakesAfterRenew[i].tokenId);
+                break;
+            }
+        }
+        console.log(unicode"续期后user1是否还有该订单:", foundInUser1AfterRenew ? unicode"是" : unicode"否");
+
+        // 验证订单信息不在user2名下
+        bool foundInUser2AfterRenew = false;
+        for (uint256 i = 0; i < user2StakesAfterRenew.length; i++) {
+            if (user2StakesAfterRenew[i].tokenId == tokenId) {
+                foundInUser2AfterRenew = true;
+                console.log(unicode"⚠️ 警告：在user2的订单中也找到了tokenId:", user2StakesAfterRenew[i].tokenId);
+                break;
+            }
+        }
+        console.log(unicode"续期后user2是否还有该订单:", foundInUser2AfterRenew ? unicode"是" : unicode"否");
+
+        // 验证NFT所有权仍然属于user3
+        assertEq(nftManager.ownerOf(tokenId), user3, "NFT should still be owned by user3");
+        console.log(unicode"✅ 验证通过：续期后订单信息在user3名下");
+        console.log(unicode"✅ 验证完成：NFT所有权和订单归属验证");
     }
 }
