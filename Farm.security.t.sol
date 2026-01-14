@@ -9,7 +9,7 @@ import {Farm_Deployer_Base} from "script/Farm/base/Farm_Deployer_Base.sol";
 import {Vault} from "src/Vault/Vault.sol";
 import {PUSDOracleUpgradeable} from "src/Oracle/PUSDOracle.sol";
 import {NFTManager} from "src/token/NFTManager/NFTManager.sol";
-import {FarmLend} from "src/Farm/FarmLend.sol";
+
 import {ERC20Mock} from "test/mocks/ERC20Mock.sol";
 import {MockyPUSD} from "test/mocks/MockyPUSD.sol";
 import {IFarm} from "src/interfaces/IFarm.sol";
@@ -25,7 +25,6 @@ contract FarmSecurityTest is Test {
     NFTManager nftManager;
     Vault vault;
     MockyPUSD ypusd;
-    FarmLend farmLend;
 
     // 固定地址（fork-safe）
     address admin = address(0xA11CE);

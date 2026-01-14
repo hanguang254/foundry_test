@@ -174,13 +174,14 @@ contract yPUSDSecurityTest is Test, yPUSD_Deployer_Base {
      */
     function test_Security_DepositCannotExceedCap() public {
         console.log(unicode"测试：防止存款超过 cap");
-        // 注意：由于 _decimalsOffset() = 3，shares 是 assets 的 1000 倍
-        // cap 的单位是 shares，所以如果 cap = 1000e6，在初始汇率下最多可以存入 1000e6 / 1000 = 1e6 assets
-        uint256 smallCap = 1000 * 1e6;
+        // 现在 yPUSD 采用 1:1 的 shares:assets 比例（decimalsOffset = 0）
+        // cap 的单位是 shares，此时与 assets 等值
+        uint256 smallCap = 1000 * 1e6; // 1000 PUSD
         vm.prank(admin);
         vault.setCap(smallCap);
 
-        uint256 maxAssets = smallCap / 1000; // 在初始汇率下最多可以存入的 assets
+        // 在 1:1 汇率下，最多可以存入 smallCap 个 assets
+        uint256 maxAssets = smallCap;
         // 铸造足够的 PUSD
         pusd.mint(user1, maxAssets * 2);
 
@@ -542,17 +543,16 @@ contract yPUSDSecurityTest is Test, yPUSD_Deployer_Base {
         vm.prank(user3);
         uint256 shares3 = vault.deposit(depositAmount, user3);
 
-        // 所有用户应该获得相同的 shares（因为初始汇率是 1:1）
-        // 注意：由于 _decimalsOffset() = 3，shares 是 assets 的 1000 倍
-        uint256 expectedShares = depositAmount * 1000;
+        // 所有用户应该获得相同的 shares（因为初始汇率是 1:1，shares 与 assets 等值）
+        uint256 expectedShares = depositAmount;
         assertEq(shares1, expectedShares);
         assertEq(shares2, expectedShares);
         assertEq(shares3, expectedShares);
 
         // 总资产应该是所有存款之和
         assertEq(vault.totalAssets(), depositAmount * 3);
-        // 注意：由于 _decimalsOffset() = 3，totalSupply 是 totalAssets 的 1000 倍
-        assertEq(vault.totalSupply(), depositAmount * 3 * 1000);
+        // 在 1:1 模式下，totalSupply 与 totalAssets 等值
+        assertEq(vault.totalSupply(), depositAmount * 3);
     }
 
     /**
@@ -665,28 +665,27 @@ contract yPUSDSecurityTest is Test, yPUSD_Deployer_Base {
      */
     function test_Concurrency_CapLimitUnderHighConcurrency() public {
         console.log(unicode"测试：高并发下的 cap 限制");
-        // 注意：由于 _decimalsOffset() = 3，shares 是 assets 的 1000 倍
-        // 所以如果 cap 是 3000e6，实际可以存入的 assets 总和应该小于等于 cap / 1000 = 3e6
-        // 但 cap 的单位是 shares，所以 cap = 3000e6 意味着最多 3000e6 shares
-        // 对应的 assets 最多是 3000e6 / 1000 = 3e6（在初始汇率 1:1 时）
-        uint256 smallCap = 3000 * 1e6;
+        // 现在 yPUSD 采用 1:1 的 shares:assets 比例（decimalsOffset = 0）
+        // cap 的单位是 shares，因此 cap = 3000e6 意味着最多 3000e6 assets
+        uint256 smallCap = 3000 * 1e6; // 3000 PUSD
         vm.prank(admin);
         vault.setCap(smallCap);
 
-        // 三个用户都尝试存入，但需要考虑 cap 限制
-        // 由于 cap = 3000e6 shares，在初始汇率下最多可以存入 3000e6 / 1000 = 3e6 assets
+        // 三个用户都尝试存入，但需要考虑 cap 与 MIN_INITIAL_SHARES 限制
         pusd.mint(user1, 2000 * 1e6);
         pusd.mint(user2, 2000 * 1e6);
         pusd.mint(user3, 2000 * 1e6);
 
         vm.startPrank(user1);
         pusd.approve(address(vault), 2000 * 1e6);
-        vault.deposit(1e6, user1); // 存入 1e6 assets，得到 1e9 shares
+        // 第一次存款需要满足 MIN_INITIAL_SHARES（1000e6），这里直接存入 1000e6
+        vault.deposit(1000 * 1e6, user1);
         vm.stopPrank();
 
         vm.startPrank(user2);
         pusd.approve(address(vault), 2000 * 1e6);
-        vault.deposit(1e6, user2); // 存入 1e6 assets，得到 1e9 shares
+        // 第二个用户再存入 2000e6，刚好把 cap 填满
+        vault.deposit(2000 * 1e6, user2);
         vm.stopPrank();
 
         // 用户3尝试存入，但 cap 已满
@@ -741,7 +740,7 @@ contract yPUSDSecurityTest is Test, yPUSD_Deployer_Base {
             pusd.mint(users[i], 10000e6);
         }
 
-        // 所有人存入 1000 => 总 supply=10000e6，总 assets(可计入)=10000e6
+        // 所有人存入 1000 => 总 supply=10000e6，总 assets(可计入)=10000e6（1:1 比例）
         for (uint256 i = 0; i < users.length; i++) {
             vm.startPrank(users[i]);
             pusd.approve(address(vault), 10000e6);
@@ -749,8 +748,8 @@ contract yPUSDSecurityTest is Test, yPUSD_Deployer_Base {
             vm.stopPrank();
         }
 
-        // 注意：由于 _decimalsOffset() = 3，shares 是 assets 的 1000 倍
-        assertEq(vault.totalSupply(), 10_000e6 * 1000); // shares = assets * 1000
+        // 在 1:1 模式下，totalSupply 与 totalAssets 等值
+        assertEq(vault.totalSupply(), 10_000e6);
         assertEq(vault.totalAssets(), 10_000e6);
 
         // 注入收益 1000（线性释放：立刻不计入 totalAssets）
@@ -773,10 +772,8 @@ contract yPUSDSecurityTest is Test, yPUSD_Deployer_Base {
             vault.redeem(userShares / 2, users[i], users[i]);
         }
 
-        // ✅ 关键断言2：赎回后总 supply 应为 5000e6
-        // 注意：由于 _decimalsOffset() = 3，shares 是 assets 的 1000 倍
-        // 所以如果 assets 是 5000e6，shares 应该是 5000e9 = 5e12
-        assertEq(vault.totalSupply(), 5_000e6 * 1000);
+        // ✅ 关键断言2：赎回后总 supply 应为 5000e6（1:1 比例）
+        assertEq(vault.totalSupply(), 5_000e6);
 
         // ✅ 关键断言3：因为收益仍未释放，赎回后 totalAssets 应≈5000e6（不是 5500）
         assertApproxEqAbs(vault.totalAssets(), 5_000e6, 50);
@@ -1067,9 +1064,11 @@ contract yPUSDSecurityTest is Test, yPUSD_Deployer_Base {
         assertEq(rate, 1e18);
 
         // 验证零供应量时的转换
-        // 注意：由于 _decimalsOffset() = 3，shares 是 assets 的 1000 倍
-        assertEq(vault.convertToShares(1000 * 1e6), 1000 * 1e6 * 1000);
-        assertEq(vault.convertToAssets(1000 * 1e6 * 1000), 1000 * 1e6);
+        // 采用 1:1 的 shares:assets 比例
+        uint256 assets = 1000 * 1e6;
+        uint256 shares = vault.convertToShares(assets);
+        assertEq(shares, assets);
+        assertEq(vault.convertToAssets(shares), assets);
     }
 
     /**
@@ -1092,6 +1091,14 @@ contract yPUSDSecurityTest is Test, yPUSD_Deployer_Base {
         console.log(unicode"测试：极小金额的存款和取款（精度测试）");
         uint256 tinyAmount = 1; // 最小单位
 
+        // 先通过一次大额存款使 totalSupply >= MIN_INITIAL_SHARES，
+        // 避免 MIN_INITIAL_SHARES 保护机制阻止小额存款
+        vm.startPrank(user2);
+        pusd.mint(user2, 1000 * 1e6);
+        pusd.approve(address(vault), 1000 * 1e6);
+        vault.deposit(1000 * 1e6, user2);
+        vm.stopPrank();
+
         vm.startPrank(user1);
         pusd.mint(user1, tinyAmount);
         pusd.approve(address(vault), tinyAmount);
@@ -1113,24 +1120,32 @@ contract yPUSDSecurityTest is Test, yPUSD_Deployer_Base {
      */
     function test_Extreme_DepositNearCap() public {
         console.log(unicode"测试：接近 cap 的边界存款");
-        // 注意：由于 _decimalsOffset() = 3，shares 是 assets 的 1000 倍
-        // cap 的单位是 shares，所以如果 cap = 10000e6，在初始汇率下最多可以存入 10000e6 / 1000 = 10e6 assets
+        // 现在 yPUSD 采用 1:1 的 shares:assets 比例（decimalsOffset = 0）
+        // cap 的单位是 shares，与 assets 等值
         uint256 smallCap = 10000 * 1e6;
         vm.prank(admin);
         vault.setCap(smallCap);
 
-        uint256 maxAssets = smallCap / 1000; // 在初始汇率下最多可以存入的 assets
-        pusd.mint(user1, maxAssets);
+        // 先进行一次大额存款满足 MIN_INITIAL_SHARES 要求
+        pusd.mint(user1, smallCap);
 
         vm.startPrank(user1);
-        pusd.approve(address(vault), maxAssets);
+        pusd.approve(address(vault), smallCap);
 
-        // 存入接近 cap 的金额
-        uint256 depositAmount = maxAssets - 1;
-        vault.deposit(depositAmount, user1);
+        // 先存入 1000e6，确保 totalSupply >= MIN_INITIAL_SHARES
+        vault.deposit(1000 * 1e6, user1);
 
-        // 验证还能存入 1
-        assertGe(vault.maxDeposit(user1), 0);
+        // 计算此时还能存入的最大金额
+        uint256 maxAssets = vault.maxDeposit(user1);
+
+        // 存入接近 cap 的金额（留出 1 wei 空间）
+        if (maxAssets > 1) {
+            uint256 depositAmount = maxAssets - 1;
+            vault.deposit(depositAmount, user1);
+        }
+
+        // 验证还能至少再存入 1 wei
+        assertGe(vault.maxDeposit(user1), 1);
 
         vm.stopPrank();
     }
@@ -1141,8 +1156,8 @@ contract yPUSDSecurityTest is Test, yPUSD_Deployer_Base {
     function test_Extreme_ExchangeRatePrecision() public {
         console.log(unicode"测试：收益注入后汇率精度问题（线性释放版本）");
 
-        // 1) 存入 1 PUSD
-        uint256 depositAmount = 1e6; // 1 PUSD
+        // 1) 存入 1000 PUSD（满足 MIN_INITIAL_SHARES 要求）
+        uint256 depositAmount = 1000e6; // 1000 PUSD
 
         vm.startPrank(user1);
         pusd.approve(address(vault), depositAmount);
@@ -1177,10 +1192,10 @@ contract yPUSDSecurityTest is Test, yPUSD_Deployer_Base {
         assertGe(rateAfterVesting, expectedRateAfterVesting - 5e13); // 允许小误差
 
         // （可选）验证 totalAssets 至少增加了 1
-        // deposit 1e6 + yield 1 => totalAssets 应为 1e6 + 1
+        // deposit depositAmount + yield 1 => totalAssets 应为 depositAmount + 1
         assertEq(vault.totalAssets(), depositAmount + 1);
 
-        // （可选）用户资产应为 1e6 + 1（如果shares=1e6），允许小误差
+        // （可选）用户资产应为 depositAmount + 1（允许小误差）
         uint256 userShares = vault.balanceOf(user1);
         uint256 userAssets = vault.convertToAssets(userShares);
         // 允许一定的精度误差
@@ -1206,9 +1221,8 @@ contract yPUSDSecurityTest is Test, yPUSD_Deployer_Base {
             vm.stopPrank();
         }
 
-        // 验证总供应量
-        // 注意：由于 _decimalsOffset() = 3，shares 是 assets 的 1000 倍
-        assertEq(vault.totalSupply(), depositPerUser * userCount * 1000);
+        // 验证总供应量（1:1 模式下 shares 与 assets 等值）
+        assertEq(vault.totalSupply(), depositPerUser * userCount);
         assertEq(vault.totalAssets(), depositPerUser * userCount);
     }
 
@@ -1217,13 +1231,14 @@ contract yPUSDSecurityTest is Test, yPUSD_Deployer_Base {
      */
     function test_Extreme_CapExactlyFull() public {
         console.log(unicode"测试：在 cap 刚好满时的操作");
-        // 注意：由于 _decimalsOffset() = 3，shares 是 assets 的 1000 倍
-        // cap 的单位是 shares，所以如果 cap = 10000e6，在初始汇率下最多可以存入 10000e6 / 1000 = 10e6 assets
+        // 现在 yPUSD 采用 1:1 的 shares:assets 比例（decimalsOffset = 0）
+        // cap 的单位是 shares，与 assets 等值
         uint256 exactCap = 10000 * 1e6;
         vm.prank(admin);
         vault.setCap(exactCap);
 
-        uint256 maxAssets = exactCap / 1000; // 在初始汇率下最多可以存入的 assets
+        // 计算可以存入的最大资产（在 1:1 模式下等于 cap）
+        uint256 maxAssets = vault.maxDeposit(user1);
         pusd.mint(user1, maxAssets);
 
         vm.startPrank(user1);
@@ -1436,10 +1451,11 @@ contract yPUSDSecurityTest is Test, yPUSD_Deployer_Base {
      */
     function test_FlashLoan_ManipulateRateCalculation() public {
         console.log(unicode"测试：闪电贷攻击 - 尝试通过大量存款影响汇率计算");
-        // 初始状态：用户1存入少量资金
+        // 初始状态：用户1存入 1000 PUSD（满足 MIN_INITIAL_SHARES 要求）
         vm.startPrank(user1);
-        pusd.approve(address(vault), 100 * 1e6);
-        vault.deposit(100 * 1e6, user1);
+        // 授权金额需覆盖实际存款 1000e6
+        pusd.approve(address(vault), 1000 * 1e6);
+        vault.deposit(1000 * 1e6, user1);
         vm.stopPrank();
 
         uint256 initialRate = vault.exchangeRate();
@@ -1521,25 +1537,23 @@ contract yPUSDSecurityTest is Test, yPUSD_Deployer_Base {
      */
     function test_FlashLoan_AttackViaCap() public {
         console.log(unicode"测试：闪电贷攻击 - 尝试通过 cap 限制进行攻击");
-        // 注意：由于 _decimalsOffset() = 3，shares 是 assets 的 1000 倍
-        // cap 的单位是 shares，所以如果 cap = 10000e6，在初始汇率下最多可以存入 10000e6 / 1000 = 10e6 assets
+        // 现在 yPUSD 采用 1:1 的 shares:assets 比例（decimalsOffset = 0）
+        // cap 的单位是 shares，与 assets 等值
         uint256 smallCap = 10000 * 1e6;
         vm.prank(admin);
         vault.setCap(smallCap);
 
-        // 用户1存入接近 cap
-        // 在初始汇率下，最多可以存入 smallCap / 1000 = 10e6 assets
-        uint256 maxAssets = smallCap / 1000;
+        // 用户1存入接近 cap，但留下少量空间
+        uint256 maxAssets = smallCap;
         vm.startPrank(user1);
         pusd.approve(address(vault), maxAssets);
-        vault.deposit(maxAssets - 1e6, user1); // 存入 maxAssets - 1e6，留出 1e6 空间
+        vault.deposit(maxAssets - 1e6, user1); // 留出 1e6 空间
         vm.stopPrank();
 
         // 计算剩余空间（以 assets 为单位）
-        uint256 remainingAssets = maxAssets - vault.totalAssets(); // 应该是约 1e6
+        uint256 remainingAssets = vault.maxDeposit(attacker); // 应该是约 1e6
 
         // 攻击者尝试通过闪电贷填满 cap，阻止其他用户
-        // 注意：攻击者只能存入剩余的空间（以 assets 为单位）
         uint256 flashLoanAmount = remainingAssets;
         pusd.mint(attacker, flashLoanAmount);
 
